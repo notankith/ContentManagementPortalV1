@@ -1,0 +1,14 @@
+import { NextResponse } from "next/server"
+import { checkRepoAccess } from "@/lib/github-storage"
+
+export async function GET() {
+  try {
+    const result = await checkRepoAccess()
+    return NextResponse.json({ ok: true, result })
+  } catch (err) {
+    console.error("[github-debug] Error:", err)
+    return NextResponse.json({ ok: false, error: String(err) }, { status: 500 })
+  }
+}
+
+export const runtime = "nodejs"
