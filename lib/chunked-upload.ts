@@ -1,5 +1,5 @@
 import { logUploadError, extractErrorDetails } from "@/lib/error-logger"
-import { uploadVideo } from "@/lib/github-storage"
+import cloudinaryStorage from "@/lib/cloudinary-storage"
 import {
   detectNetworkQuality,
   calculateEstimatedUploadTime,
@@ -7,7 +7,8 @@ import {
   type UploadMetrics,
 } from "@/lib/network-diagnostics"
 
-// GitHub Contents API isn't suitable for very large files. We set a safe limit.
+// Cloudinary direct/server upload isn't suitable for very large files via this path.
+// We set a safe limit and recommend using an object store for very large uploads.
 const SAFE_UPLOAD_LIMIT = 100 * 1024 * 1024 // 100MB
 
 interface UploadProgress {
@@ -49,13 +50,15 @@ export async function uploadLargeFile(
 
   // For files under 50MB, use direct upload
   if (file.size > SAFE_UPLOAD_LIMIT) {
-    throw new Error(`File exceeds safe GitHub upload limit of ${Math.round(SAFE_UPLOAD_LIMIT / 1024 / 1024)}MB. Use an object store or other solution.`)
+  throw new Error(`File exceeds safe upload limit of ${Math.round(SAFE_UPLOAD_LIMIT / 1024 / 1024)}MB. Use an object store or other solution.`)
   }
 
   try {
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
-    const { rawUrl } = await uploadVideo(path, buffer, `Upload ${path}`)
+  // Provide a sanitized filename so Cloudinary won't derive a display name with invalid characters
+  const safeName = file.name.replace(/[^a-zA-Z0-9_.-]/g, "_")
+  const { rawUrl } = await cloudinaryStorage.uploadVideo(path, buffer, `Upload ${path}`, safeName)
 
     onProgress?.({
       loaded: file.size,
@@ -64,7 +67,7 @@ export async function uploadLargeFile(
       speed: file.size / ((Date.now() - metrics.startTime) / 1000),
     })
 
-    console.log(`[v0] [${uploadId}] Direct upload (GitHub) successful: ${rawUrl}`)
+  console.log(`[v0] [${uploadId}] Direct upload successful: ${rawUrl}`)
     return rawUrl
   } catch (error) {
     const errorDetails = extractErrorDetails(error)

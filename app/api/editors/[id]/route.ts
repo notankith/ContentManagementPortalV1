@@ -1,6 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { getDb } from "@/lib/mongo-client"
-import { deleteVideo } from "@/lib/github-storage"
+import cloudinaryStorage from "@/lib/cloudinary-storage"
 import { ObjectId } from "mongodb"
 
 export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
@@ -62,29 +62,30 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
       for (const upload of uploads) {
         try {
           if (upload.media_path) {
-            await deleteVideo(upload.media_path)
+            await cloudinaryStorage.deleteVideo(upload.media_path)
             console.log("[v0] Deleted media file (path):", upload.media_path)
           } else if (upload.media_url) {
-            // best-effort: attempt to derive path from raw.githubusercontent URL
-            const match = typeof upload.media_url === "string" && upload.media_url.match(/https:\/\/raw\.githubusercontent\.com\/.+?\/.+?\/(.+)$/)
-            if (match && match[1]) {
-              await deleteVideo(decodeURIComponent(match[1]))
-              console.log("[v0] Deleted media file (derived path):", match[1])
-            }
+              // best-effort: attempt to derive a stored path from legacy raw.githubusercontent URLs (if any)
+              const match = typeof upload.media_url === "string" && upload.media_url.match(/https:\/\/raw\.githubusercontent\.com\/.+?\/.+?\/(.+)$/)
+              if (match && match[1]) {
+                // attempt delete via Cloudinary using derived identifier (may not apply for older GitHub-hosted assets)
+                await cloudinaryStorage.deleteVideo(decodeURIComponent(match[1]))
+                console.log("[v0] Deleted media file (derived path):", match[1])
+              }
           }
 
           if (upload.thumbnail_path) {
-            await deleteVideo(upload.thumbnail_path)
+            await cloudinaryStorage.deleteVideo(upload.thumbnail_path)
             console.log("[v0] Deleted thumbnail file (path):", upload.thumbnail_path)
           } else if (upload.thumbnail_url) {
             const match = typeof upload.thumbnail_url === "string" && upload.thumbnail_url.match(/https:\/\/raw\.githubusercontent\.com\/.+?\/.+?\/(.+)$/)
             if (match && match[1]) {
-              await deleteVideo(decodeURIComponent(match[1]))
+              await cloudinaryStorage.deleteVideo(decodeURIComponent(match[1]))
               console.log("[v0] Deleted thumbnail file (derived path):", match[1])
             }
           }
         } catch (err) {
-          console.warn("[v0] Warning: Could not delete file from GitHub, continuing with DB cleanup:", err)
+          console.warn("[v0] Warning: Could not delete file from storage provider, continuing with DB cleanup:", err)
         }
       }
     }

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server"
 // Ensure you set PAGE_ID and PAGE_TOKEN in your environment or .env file (do NOT commit secrets).
 const PAGE_ID = process.env.PAGE_ID ?? ""
 const PAGE_TOKEN = process.env.PAGE_TOKEN ?? ""
+const IG_REELS = (process.env.IG_REELS || "").toLowerCase() === "true"
 
 if (!PAGE_ID || !PAGE_TOKEN) {
   // Log a clear error during server start so maintainers notice missing env vars.
@@ -27,7 +28,20 @@ async function schedulePost(item: any, scheduledTime: Date) {
     payload.append("access_token", PAGE_TOKEN)
 
     const res = await fetch(url, { method: "POST", body: payload })
-    return res.json()
+    const fbJson = await res.json()
+
+    // If IG cross-posting enabled, attempt to schedule on the connected Instagram Business account
+    if (IG_REELS) {
+      try {
+        const igRes = await scheduleInstagram(item, scheduledTime)
+        return { facebook: fbJson, instagram: igRes }
+      } catch (err) {
+        console.error("Instagram schedule error (video):", err)
+        return { facebook: fbJson, instagram_error: String(err) }
+      }
+    }
+
+    return { facebook: fbJson }
   } else {
     // For images, use a two-step approach:
     // 1) Create an unpublished photo on the Page via /{page-id}/photos with published=false
@@ -47,9 +61,20 @@ async function schedulePost(item: any, scheduledTime: Date) {
         feedPayload.append("access_token", PAGE_TOKEN)
 
         const feedRes = await fetch(feedUrl, { method: "POST", body: feedPayload })
-        const feedJson = await feedRes.json()
-        console.log("Scheduled text-only feed response:", feedJson)
-        return { feed: feedJson }
+          const feedJson = await feedRes.json()
+          console.log("Scheduled text-only feed response:", feedJson)
+
+          if (IG_REELS) {
+            try {
+              const igRes = await scheduleInstagram(item, scheduledTime)
+              return { feed: feedJson, instagram: igRes }
+            } catch (err) {
+              console.error("Instagram schedule error (text-only):", err)
+              return { feed: feedJson, instagram_error: String(err) }
+            }
+          }
+
+          return { feed: feedJson }
       }
 
       // Step 1: Create unpublished photo
@@ -84,11 +109,76 @@ async function schedulePost(item: any, scheduledTime: Date) {
       const feedJson = await feedRes.json()
       console.log("Scheduled feed create response:", feedJson)
 
+      if (IG_REELS) {
+        try {
+          const igRes = await scheduleInstagram(item, scheduledTime)
+          return { photo: photoJson, post: feedJson, instagram: igRes }
+        } catch (err) {
+          console.error("Instagram schedule error (image):", err)
+          return { photo: photoJson, post: feedJson, instagram_error: String(err) }
+        }
+      }
+
       return { photo: photoJson, post: feedJson }
     } catch (err) {
       console.error("Error scheduling image post:", err)
       return { error: String(err) }
     }
+  }
+}
+
+// Helper: find the connected Instagram Business Account ID for the Page (cached per process)
+let _cachedIgId: string | null = null
+async function getInstagramBusinessAccountId() {
+  if (_cachedIgId) return _cachedIgId
+  try {
+    const url = `https://graph.facebook.com/v17.0/${PAGE_ID}?fields=instagram_business_account&access_token=${PAGE_TOKEN}`
+    const res = await fetch(url)
+    const json = await res.json()
+    const ig = json && json.instagram_business_account && json.instagram_business_account.id
+    if (ig) {
+      _cachedIgId = String(ig)
+      return _cachedIgId
+    }
+    throw new Error("No connected instagram_business_account found for this Page")
+  } catch (err) {
+    throw err
+  }
+}
+
+// Schedule to Instagram Business Account: attempt to create an unpublished media container
+// with the same caption and media URL and set scheduled_publish_time when possible.
+async function scheduleInstagram(item: any, scheduledTime: Date) {
+  const igId = await getInstagramBusinessAccountId()
+  const timestamp = Math.floor(scheduledTime.getTime() / 1000)
+
+  // For videos and images, create a media container on the IG account. We attempt to
+  // pass `published=false` and `scheduled_publish_time` similar to Page scheduling.
+  // Note: Instagram Graph API scheduling support may vary by API version and account.
+  try {
+    const createUrl = `https://graph.facebook.com/v17.0/${igId}/media`
+    const payload: any = new URLSearchParams()
+    payload.append("caption", item.description || "")
+    if ((item.media_type || "").toLowerCase() === "video") {
+      payload.append("media_type", "VIDEO")
+      payload.append("video_url", item.media_url || "")
+    } else {
+      payload.append("image_url", item.media_url || "")
+    }
+    // In many Graph endpoints 'is_published' or 'published' is used; try both fallbacks.
+    payload.append("published", "false")
+    payload.append("is_published", "false")
+    payload.append("scheduled_publish_time", String(timestamp))
+    payload.append("access_token", PAGE_TOKEN)
+
+    const res = await fetch(createUrl, { method: "POST", body: payload })
+    const json = await res.json()
+
+    // If Instagram requires a separate publish call, return the creation response so
+    // an operator can inspect and later publish via /{ig_media_id}/publish.
+    return json
+  } catch (err) {
+    throw err
   }
 }
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { getDb } from "@/lib/mongo-client"
-import { deleteVideo } from "@/lib/github-storage"
+import cloudinaryStorage from "@/lib/cloudinary-storage"
 
 export async function POST(request: Request) {
   try {
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     for (const id of Array.from(publicIds)) {
       // attempt to delete as image first, if that fails try as video
       try {
-        const cloudResp = await deleteVideo(id, `Delete by admin delete-cloudinary-files at ${new Date().toISOString()}`, "image")
+        const cloudResp = await cloudinaryStorage.deleteVideo(id, `Delete by admin delete-cloudinary-files at ${new Date().toISOString()}`, "image")
         const uploadsDeleted = await db.collection('uploads').deleteMany({ $or: [{ media_path: id }, { thumbnail_path: id }] })
         const logsUpdated = await db.collection('logs').updateMany({ $or: [{ media_path: id }, { thumbnail_path: id }, { media_url: { $regex: id } }, { thumbnail_url: { $regex: id } }] }, { $unset: { media_path: "", thumbnail_path: "", media_url: "", thumbnail_url: "" } })
 
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       } catch (errImage: any) {
         // try video delete as fallback
         try {
-          const cloudResp = await deleteVideo(id, `Delete by admin delete-cloudinary-files at ${new Date().toISOString()}`, "video")
+          const cloudResp = await cloudinaryStorage.deleteVideo(id, `Delete by admin delete-cloudinary-files at ${new Date().toISOString()}`, "video")
           const uploadsDeleted = await db.collection('uploads').deleteMany({ $or: [{ media_path: id }, { thumbnail_path: id }] })
           const logsUpdated = await db.collection('logs').updateMany({ $or: [{ media_path: id }, { thumbnail_path: id }, { media_url: { $regex: id } }, { thumbnail_url: { $regex: id } }] }, { $unset: { media_path: "", thumbnail_path: "", media_url: "", thumbnail_url: "" } })
 

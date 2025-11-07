@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
 import { logUploadError } from "@/lib/error-logger"
-import { uploadVideo } from "@/lib/github-storage"
+import cloudinaryStorage from "@/lib/cloudinary-storage"
 
-const MAX_VIDEO_SIZE = 500 * 1024 * 1024 // 500MB (safe limit for GitHub contents API usage)
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024 // 500MB (conservative server-side upload limit)
 const MAX_IMAGE_SIZE = 100 * 1024 * 1024 // 100MB
 
 const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime", "video/x-msvideo", "video/x-matroska"]
@@ -69,15 +69,16 @@ export async function POST(request: Request) {
     const maxSize = isThumbnail ? MAX_IMAGE_SIZE : mediaType === "video" ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE
     if ((fileSize as number) > maxSize) throw new Error(`File exceeds maximum size of ${Math.round(maxSize / 1024 / 1024)}MB`)
 
-    const timestamp = Date.now()
-    const safeName = sanitizeFileName(fileName)
+  const timestamp = Date.now()
+  const safeName = sanitizeFileName(fileName)
     const directory = isThumbnail ? "thumbnails" : "uploads"
     const path = `${directory}/${editorId}/${timestamp}-${safeName}`
 
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
 
-    const { apiResponse, rawUrl } = await uploadVideo(path, buffer, `Upload ${path}`)
+  console.log(`[v0] [${requestId}] Uploading to Cloudinary - path:`, path, 'sanitizedFilename:', safeName)
+  const { apiResponse, rawUrl } = await cloudinaryStorage.uploadVideo(path, buffer, `Upload ${path}`, safeName)
 
     return NextResponse.json({ url: rawUrl, path }, { status: 200 })
   } catch (error) {

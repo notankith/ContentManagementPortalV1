@@ -2,7 +2,7 @@
 
 import type { ChangeEvent, DragEvent, FormEvent } from "react"
 import { useState, useRef, useEffect } from "react"
-// Replaced Vercel blob client with custom upload to server-side GitHub storage endpoint
+// Replaced Vercel blob client with custom upload to server-side Cloudinary endpoint
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -117,7 +117,11 @@ export function UploadForm({ editorId, editorName, editorType, onUploadSuccess }
     const safeName = sanitizeFileName(fileToUpload.name)
     const timestamp = Date.now()
     const directory = options.isThumbnail ? "thumbnails" : "uploads"
-    const publicId = `${directory}/${editorId}/${timestamp}-${safeName}`
+  const publicId = `${directory}/${editorId}/${timestamp}-${safeName}`
+  // Cloudinary may derive a display name from the provided public_id or filename.
+  // Replace forward slashes in the public_id with underscores for direct uploads
+  // to avoid errors like "Display name cannot contain slashes".
+  const publicIdForUpload = publicId.replace(/\//g, "_")
 
     if (fileToUpload.size > CLIENT_DIRECT_UPLOAD_THRESHOLD) {
       // Direct upload to Cloudinary (unsigned preset or signed via server)
@@ -164,25 +168,42 @@ export function UploadForm({ editorId, editorName, editorType, onUploadSuccess }
         xhr.onerror = () => reject(new Error("Network error during Cloudinary upload"))
         xhr.onabort = () => reject(new Error("Upload aborted"))
 
-        const form = new FormData()
-        form.append("file", fileToUpload)
-        form.append("public_id", publicId)
+  const form = new FormData()
+  // Append the file with a sanitized filename to ensure the multipart
+  // Content-Disposition filename does not contain slashes (Cloudinary can
+  // derive the display name from that). The third argument sets the
+  // filename that will be sent in the multipart metadata.
+  form.append("file", fileToUpload, safeName)
+  form.append("public_id", publicIdForUpload)
+  // Provide explicit filename fields so Cloudinary won't synthesize a display name
+  // containing invalid characters.
+  form.append("filename", safeName)
+  form.append("original_filename", safeName)
 
         if (unsignedPreset) {
           form.append("upload_preset", unsignedPreset)
         } else {
           // Request signature from server
-          fetch("/api/upload/sign", {
+            fetch("/api/upload/sign", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ public_id: publicId }),
+            body: JSON.stringify({ public_id: publicIdForUpload }),
           })
             .then((r) => r.json())
             .then((sig) => {
               if (sig?.error) return reject(new Error(sig.error))
+              // Log the signature response keys (do not log secrets) and the sanitized public_id used
+              console.log('[cloudinary] signature response (keys):', Object.keys(sig), 'public_id_for_upload:', publicIdForUpload)
               form.append("api_key", sig.api_key)
               form.append("timestamp", String(sig.timestamp))
               form.append("signature", sig.signature)
+              // Log the form fields we care about before sending (avoid logging file binary)
+              try {
+                const preview = { public_id: form.get('public_id'), filename: form.get('filename'), original_filename: form.get('original_filename') }
+                console.log('[cloudinary] direct upload form preview:', preview)
+              } catch (e) {
+                console.log('[cloudinary] direct upload form preview failed to read')
+              }
               xhr.send(form)
             })
             .catch((err) => reject(err))

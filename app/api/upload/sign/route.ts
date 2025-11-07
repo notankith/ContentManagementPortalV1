@@ -11,7 +11,12 @@ export const runtime = "nodejs"
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}))
-    const publicId = body?.public_id || body?.publicId || ""
+    let publicId = body?.public_id || body?.publicId || ""
+    // Sanitize incoming publicId: remove or replace slashes to avoid Cloudinary
+    // display name errors. Mirror the sanitization used by uploads.
+    if (publicId) {
+      publicId = String(publicId).replace(/^\/+/, "").replace(/[\/\\]/g, "_")
+    }
 
     const CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME
     const API_KEY = process.env.CLOUDINARY_API_KEY
@@ -23,8 +28,8 @@ export async function POST(request: Request) {
 
     const timestamp = Math.floor(Date.now() / 1000)
 
-    const paramsToSign: Array<[string, string]> = []
-    if (publicId) paramsToSign.push(["public_id", publicId])
+  const paramsToSign: Array<[string, string]> = []
+  if (publicId) paramsToSign.push(["public_id", publicId])
     paramsToSign.push(["timestamp", String(timestamp)])
 
     const toSign = paramsToSign

@@ -28,3 +28,13 @@ Continue building your app on:
 2. Deploy your chats from the v0 interface
 3. Changes are automatically pushed to this repository
 4. Vercel deploys the latest version from this repository
+
+## Environment variables for scheduling
+
+The scheduling API requires the following environment variables set (do NOT commit secrets):
+
+- `PAGE_ID` – Facebook Page ID used for publishing/scheduling.
+- `PAGE_TOKEN` – Page access token with publish permissions.
+- `IG_REELS` – Set to `true` to enable automatic cross-posting of scheduled items to the connected Instagram Business account (optional). When enabled the scheduler will attempt to create unpublished Instagram media containers with the same caption and media URL and set the same scheduled time.
+
+Note: The Instagram account must be connected to the same Meta App and Page (the Page should have a connected `instagram_business_account`). The Graph API permissions and behavior for scheduling Instagram content may vary by API version and account type; check Meta's developer docs and your app permissions if scheduling fails.
