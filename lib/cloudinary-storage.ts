@@ -41,10 +41,22 @@ async function postForm(url: string, form: FormData) {
 export async function uploadVideo(path: string, buffer: Buffer, message?: string, filename?: string) {
   ensureConfigured()
 
-  const url = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/video/upload`
+  // Decide whether this is an image or a video based on filename or path extension.
+  // Many callers pass a filename; otherwise fall back to path. If no extension
+  // is available default to video (legacy behavior).
+  const candidate = (filename || path || "").toString()
+  const extMatch = candidate.match(/\.([^.\\/]+)$/)
+  const ext = extMatch ? String(extMatch[1]).toLowerCase() : null
+  const imageExts = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic", "heif", "avif"]
+  const isImage = ext ? imageExts.includes(ext) : false
 
-  // Cloudinary accepts data URIs as the 'file' field
-  const dataUri = `data:application/octet-stream;base64,${buffer.toString("base64")}`
+  const endpoint = isImage ? "image" : "video"
+  const url = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/${endpoint}/upload`
+
+  // Cloudinary accepts data URIs as the 'file' field. Use a matching MIME
+  // type for images to avoid 'Unsupported file type' errors (e.g. 'image/png').
+  const mimeType = isImage && ext ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : 'application/octet-stream'
+  const dataUri = `data:${mimeType};base64,${buffer.toString("base64")}`
 
   const form = new FormData()
   form.append("file", dataUri)
