@@ -1,14 +1,19 @@
 import { NextResponse } from "next/server"
 
 // Read Page credentials from environment variables for safety.
-// Ensure you set PAGE_ID and PAGE_TOKEN in your environment or .env file (do NOT commit secrets).
+// Support both PAGE_ACCESS_TOKEN and older PAGE_TOKEN for compatibility.
 const PAGE_ID = process.env.PAGE_ID ?? ""
-const PAGE_TOKEN = process.env.PAGE_TOKEN ?? ""
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN ?? process.env.PAGE_TOKEN ?? ""
+// ACCESS_TOKEN is the long-lived system user token used for Instagram Graph API calls.
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN ?? PAGE_ACCESS_TOKEN
 const IG_REELS = (process.env.IG_REELS || "").toLowerCase() === "true"
+const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION ?? "v21.0"
+// Optional: allow overriding/setting the IG account ID via env to skip the lookup
+const ENV_IG_USER_ID = process.env.IG_USER_ID ?? null
 
-if (!PAGE_ID || !PAGE_TOKEN) {
+if (!PAGE_ID || !PAGE_ACCESS_TOKEN) {
   // Log a clear error during server start so maintainers notice missing env vars.
-  console.error("Missing PAGE_ID or PAGE_TOKEN environment variables. Please set PAGE_ID and PAGE_TOKEN.")
+  console.error("Missing PAGE_ID or PAGE_ACCESS_TOKEN environment variables. Please set PAGE_ID and PAGE_ACCESS_TOKEN.")
 }
 
 // Fixed schedule times for tomorrow (same as schedule.py)
@@ -19,13 +24,13 @@ async function schedulePost(item: any, scheduledTime: Date) {
   const timestamp = Math.floor(scheduledTime.getTime() / 1000)
 
   if ((item.media_type || "").toLowerCase() === "video") {
-    const url = `https://graph.facebook.com/v17.0/${PAGE_ID}/videos`
+    const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PAGE_ID}/videos`
     const payload: any = new URLSearchParams()
     payload.append("description", item.description || "")
     payload.append("file_url", item.media_url || "")
     payload.append("published", "false")
     payload.append("scheduled_publish_time", String(timestamp))
-    payload.append("access_token", PAGE_TOKEN)
+    payload.append("access_token", PAGE_ACCESS_TOKEN)
 
     const res = await fetch(url, { method: "POST", body: payload })
     const fbJson = await res.json()
@@ -49,16 +54,16 @@ async function schedulePost(item: any, scheduledTime: Date) {
     // 2) Create a feed post via /{page-id}/feed with attached_media referencing the
     //    media_fbid and set published=false + scheduled_publish_time. This reliably
     //    creates a scheduled photo post (appears in the Page schedule/Creator Studio).
-
-    try {
+      try {
+        const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PAGE_ID}?fields=instagram_business_account&access_token=${PAGE_ACCESS_TOKEN}`
       if (!item.media_url) {
         // fallback: create a text post scheduled on the feed
-        const feedUrl = `https://graph.facebook.com/v17.0/${PAGE_ID}/feed`
+        const feedUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PAGE_ID}/feed`
         const feedPayload = new URLSearchParams()
         feedPayload.append("message", item.description || "")
         feedPayload.append("published", "false")
         feedPayload.append("scheduled_publish_time", String(timestamp))
-        feedPayload.append("access_token", PAGE_TOKEN)
+        feedPayload.append("access_token", PAGE_ACCESS_TOKEN)
 
         const feedRes = await fetch(feedUrl, { method: "POST", body: feedPayload })
           const feedJson = await feedRes.json()
@@ -78,12 +83,12 @@ async function schedulePost(item: any, scheduledTime: Date) {
       }
 
       // Step 1: Create unpublished photo
-      const photoCreateUrl = `https://graph.facebook.com/v17.0/${PAGE_ID}/photos`
+  const photoCreateUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PAGE_ID}/photos`
       const photoPayload = new URLSearchParams()
       photoPayload.append("url", item.media_url)
       // do not set caption here; use feed message as the post message
       photoPayload.append("published", "false")
-      photoPayload.append("access_token", PAGE_TOKEN)
+  photoPayload.append("access_token", PAGE_ACCESS_TOKEN)
 
       const photoRes = await fetch(photoCreateUrl, { method: "POST", body: photoPayload })
       const photoJson = await photoRes.json()
@@ -96,14 +101,14 @@ async function schedulePost(item: any, scheduledTime: Date) {
       }
 
       // Step 2: Create scheduled feed post that attaches the unpublished photo
-      const feedUrl = `https://graph.facebook.com/v17.0/${PAGE_ID}/feed`
+  const feedUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PAGE_ID}/feed`
       const feedPayload = new URLSearchParams()
       feedPayload.append("message", item.description || "")
       // attached_media needs to be provided as attached_media[0]=JSON
       feedPayload.append("attached_media[0]", JSON.stringify({ media_fbid: String(photoId) }))
       feedPayload.append("published", "false")
       feedPayload.append("scheduled_publish_time", String(timestamp))
-      feedPayload.append("access_token", PAGE_TOKEN)
+  feedPayload.append("access_token", PAGE_ACCESS_TOKEN)
 
       const feedRes = await fetch(feedUrl, { method: "POST", body: feedPayload })
       const feedJson = await feedRes.json()
@@ -131,8 +136,12 @@ async function schedulePost(item: any, scheduledTime: Date) {
 let _cachedIgId: string | null = null
 async function getInstagramBusinessAccountId() {
   if (_cachedIgId) return _cachedIgId
+  if (ENV_IG_USER_ID) {
+    _cachedIgId = String(ENV_IG_USER_ID)
+    return _cachedIgId
+  }
   try {
-    const url = `https://graph.facebook.com/v17.0/${PAGE_ID}?fields=instagram_business_account&access_token=${PAGE_TOKEN}`
+    const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${PAGE_ID}?fields=instagram_business_account&access_token=${PAGE_ACCESS_TOKEN}`
     const res = await fetch(url)
     const json = await res.json()
     const ig = json && json.instagram_business_account && json.instagram_business_account.id
@@ -151,31 +160,24 @@ async function getInstagramBusinessAccountId() {
 async function scheduleInstagram(item: any, scheduledTime: Date) {
   const igId = await getInstagramBusinessAccountId()
   const timestamp = Math.floor(scheduledTime.getTime() / 1000)
-
-  // For videos and images, create a media container on the IG account. We attempt to
-  // pass `published=false` and `scheduled_publish_time` similar to Page scheduling.
-  // Note: Instagram Graph API scheduling support may vary by API version and account.
+  // Mirror test.py: create a media container with publish_at (UTC unix timestamp)
+  // Use the SYSTEM/ACCESS_TOKEN for Instagram operations (do not mix tokens).
   try {
-    const createUrl = `https://graph.facebook.com/v17.0/${igId}/media`
+    const createUrl = `https://graph.facebook.com/${GRAPH_API_VERSION}/${igId}/media`
     const payload: any = new URLSearchParams()
     payload.append("caption", item.description || "")
     if ((item.media_type || "").toLowerCase() === "video") {
-      payload.append("media_type", "VIDEO")
+      // for videos use video_url (same naming convention as the python script)
       payload.append("video_url", item.media_url || "")
     } else {
       payload.append("image_url", item.media_url || "")
     }
-    // In many Graph endpoints 'is_published' or 'published' is used; try both fallbacks.
-    payload.append("published", "false")
-    payload.append("is_published", "false")
-    payload.append("scheduled_publish_time", String(timestamp))
-    payload.append("access_token", PAGE_TOKEN)
+    // use publish_at (UTC unix seconds) exactly as test.py does
+    payload.append("publish_at", String(timestamp))
+    payload.append("access_token", ACCESS_TOKEN)
 
     const res = await fetch(createUrl, { method: "POST", body: payload })
     const json = await res.json()
-
-    // If Instagram requires a separate publish call, return the creation response so
-    // an operator can inspect and later publish via /{ig_media_id}/publish.
     return json
   } catch (err) {
     throw err
