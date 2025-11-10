@@ -53,6 +53,10 @@ export function ScheduleManagement() {
         const fname = (u.file_name || '') as string
         const lower = (url + ' ' + fname).toLowerCase()
         const isVideo = lower.includes('.mp4') || lower.includes('.mov') || lower.includes('.webm') || lower.includes('video')
+        const tomorrowDefault = new Date()
+        tomorrowDefault.setDate(tomorrowDefault.getDate() + 1)
+        const isoTomorrow = tomorrowDefault.toISOString().slice(0, 10) // YYYY-MM-DD
+
         const item = {
           file_name: fname || url,
           media_type: isVideo ? 'video' : 'image',
@@ -60,7 +64,8 @@ export function ScheduleManagement() {
           description: u.caption || u.description || '',
           selected: true,
           id: u.id || (u._id ? String(u._id) : undefined),
-          // time will be filled below
+            // time/date will be filled below
+            date: isoTomorrow,
         }
         if (isVideo) videos.push(item)
         else images.push(item)
@@ -68,8 +73,8 @@ export function ScheduleManagement() {
 
       // assign default times per index
       const normalized: any[] = []
-      videos.forEach((v, idx) => normalized.push({ ...v, time: REEL_TIMES[idx] ?? '00:00' }))
-      images.forEach((p, idx) => normalized.push({ ...p, time: POST_TIMES[idx] ?? '12:00' }))
+  videos.forEach((v, idx) => normalized.push({ ...v, time: REEL_TIMES[idx] ?? '00:00' }))
+  images.forEach((p, idx) => normalized.push({ ...p, time: POST_TIMES[idx] ?? '12:00' }))
 
       setItems(normalized)
       setResult({ loaded: normalized.length })
@@ -92,12 +97,14 @@ export function ScheduleManagement() {
       // Schedule items one-by-one so we can show progress.
       const payloadItems = selectedItems.map((it) => {
         if (it.time) {
-          // scheduled for tomorrow at the provided time
-          const tomorrow = new Date()
-          tomorrow.setDate(tomorrow.getDate() + 1)
+          // scheduled for selected date (defaults to tomorrow) at the provided time
+          const datePart = it.date || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0,10)
           const [h, m] = it.time.split(":").map((s: string) => parseInt(s, 10) || 0)
-          tomorrow.setHours(h, m, 0, 0)
-          return { ...it, scheduled_time: tomorrow.toISOString() }
+          // construct a Date from datePart (YYYY-MM-DD) and time
+          // construct a local Date from parts to avoid timezone parsing issues
+          const [year, month, day] = datePart.split('-').map((x: string) => parseInt(x, 10))
+          const scheduled = new Date(year, (month || 1) - 1, day || 1, h, m, 0)
+          return { ...it, scheduled_time: scheduled.toISOString() }
         }
         return it
       })
@@ -184,7 +191,7 @@ export function ScheduleManagement() {
                     <th className="p-2 text-left">File</th>
                     <th className="p-2 text-left">Type</th>
                     <th className="p-2 text-left">Description</th>
-                    <th className="p-2 text-left">Time (edit)</th>
+                    <th className="p-2 text-left">Date & Time (edit)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -206,6 +213,16 @@ export function ScheduleManagement() {
                         )}
                       </td>
                       <td className="p-2">
+                        <input
+                          type="date"
+                          value={it.date || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0,10)}
+                          onChange={(e) => {
+                            const copy = [...items]
+                            copy[idx] = { ...copy[idx], date: e.target.value }
+                            setItems(copy)
+                          }}
+                          className="border px-2 py-1 rounded mr-2"
+                        />
                         <input
                           type="time"
                           value={it.time || defaultTimeForIndex(it.media_type, idx)}
@@ -236,11 +253,11 @@ export function ScheduleManagement() {
               // Schedule all items sequentially so we can track progress
               const payloadItems = items.map((it) => {
                 if (it.time) {
-                  const tomorrow = new Date()
-                  tomorrow.setDate(tomorrow.getDate() + 1)
+                  const datePart = it.date || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0,10)
                   const [h, m] = it.time.split(":").map((s: string) => parseInt(s, 10) || 0)
-                  tomorrow.setHours(h, m, 0, 0)
-                  return { ...it, scheduled_time: tomorrow.toISOString() }
+                  const [year, month, day] = datePart.split('-').map((x: string) => parseInt(x, 10))
+                  const scheduled = new Date(year, (month || 1) - 1, day || 1, h, m, 0)
+                  return { ...it, scheduled_time: scheduled.toISOString() }
                 }
                 return it
               })
